@@ -210,6 +210,8 @@ st.markdown(
     .lt-legend {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
+        row-gap: 6px;
         gap: 16px;
         margin: 0.35rem 0 0.75rem 0;
     }
@@ -249,8 +251,8 @@ st.markdown(
 st.markdown('<div class="lt-eyebrow">LAB COMPLIANCE DASHBOARD</div>', unsafe_allow_html=True)
 st.markdown('<h1 class="lt-hero-title">Labs Tracker</h1>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="lt-hero-sub">Cross-reference lab reporting activity against your master registry, '
-    'by HFR ID.</div>',
+    '<div class="lt-hero-sub">Match reporting activity to your master registry, track nil filings, '
+    'and catch reporting gaps by block — all keyed to HFR ID.</div>',
     unsafe_allow_html=True,
 )
 
@@ -927,6 +929,28 @@ if master_file and uploaded_file:
         with attn_col3:
             end_date = st.date_input("End Date", key="attendance_end")
 
+        labs_in_selected_block = [r for r in table_rows if r["Block Name"] == selected_block]
+        cal_labtype_options = sorted(
+            {r["Lab Type"] for r in labs_in_selected_block if r["Lab Type"] not in ("No Data", "No data")}
+        )
+        cal_category_options = sorted(
+            {r["Category"] for r in labs_in_selected_block if r["Category"] not in ("No Data", "No data")}
+        )
+
+        cal_filter_col1, cal_filter_col2 = st.columns(2)
+        with cal_filter_col1:
+            selected_cal_labtypes = st.multiselect(
+                "Filter by Lab Type (optional)",
+                cal_labtype_options,
+                key="cal_labtype_filter",
+            )
+        with cal_filter_col2:
+            selected_cal_categories = st.multiselect(
+                "Filter by Category (optional — from CSV / Nil Reporting)",
+                cal_category_options,
+                key="cal_category_filter",
+            )
+
         if start_date and end_date:
             if start_date > end_date:
                 st.error("Start Date must be on or before End Date.")
@@ -938,10 +962,14 @@ if master_file and uploaded_file:
                         "Consider narrowing it for readability."
                     )
 
-                labs_in_block = [r for r in table_rows if r["Block Name"] == selected_block]
+                labs_in_block = labs_in_selected_block
+                if selected_cal_labtypes:
+                    labs_in_block = [r for r in labs_in_block if r["Lab Type"] in selected_cal_labtypes]
+                if selected_cal_categories:
+                    labs_in_block = [r for r in labs_in_block if r["Category"] in selected_cal_categories]
 
                 if not labs_in_block:
-                    st.info(f"No labs found for block '{selected_block}'.")
+                    st.info(f"No labs found for block '{selected_block}' with the selected filters.")
                 else:
                     date_list = []
                     d = start_date
@@ -958,6 +986,8 @@ if master_file and uploaded_file:
                         '<span class="lt-legend-item"><span class="lt-dot lt-dot-good"></span>report filed</span>'
                         '<span class="lt-legend-item"><span class="lt-dot lt-dot-warn"></span>partial nil report</span>'
                         '<span class="lt-legend-item"><span class="lt-dot lt-dot-danger"></span>no report</span>'
+                        '<span class="lt-legend-item">F = Facility Portal Report Done</span>'
+                        '<span class="lt-legend-item">L = Lab Portal Report Done</span>'
                         '<span class="lt-legend-item">(nil) marks a report sourced from the Nil Reporting file</span>'
                         '</div>',
                         unsafe_allow_html=True,
