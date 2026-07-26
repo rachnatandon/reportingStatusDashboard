@@ -2,12 +2,242 @@ import streamlit as st
 import csv
 import zipfile
 import re
+import html
 from io import BytesIO
 from xml.etree import ElementTree as ET
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Labs Tracker", layout="wide")
-st.title("Labs Tracker")
+
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap');
+
+    :root {
+        --ink: #16232E;
+        --muted: #5B6B7A;
+        --line: #DCE3EA;
+        --surface: #FFFFFF;
+        --canvas: #F4F7FA;
+        --primary: #0B5FA5;
+        --primary-dark: #084677;
+        --teal: #0E8F8F;
+        --good: #1B8A5A;
+        --warn: #B4770E;
+        --danger: #B23A48;
+        --good-bg: rgba(27, 138, 90, 0.12);
+        --danger-bg: rgba(178, 58, 72, 0.12);
+        --shadow: rgba(22, 35, 46, 0.05);
+    }
+
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --ink: #E7ECF1;
+            --muted: #93A1AF;
+            --line: #2A3441;
+            --surface: #161C24;
+            --canvas: #0E1319;
+            --primary: #5AA9E6;
+            --primary-dark: #7DBDEF;
+            --teal: #4FCFCF;
+            --good: #46CC8D;
+            --warn: #E3AC4D;
+            --danger: #E58A93;
+            --good-bg: rgba(70, 204, 141, 0.16);
+            --danger-bg: rgba(229, 138, 147, 0.16);
+            --shadow: rgba(0, 0, 0, 0.25);
+        }
+    }
+
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; color: var(--ink); }
+    .stApp { background: var(--canvas); }
+
+    h1, h2, h3 { font-family: 'Manrope', sans-serif; letter-spacing: -0.01em; color: var(--ink); }
+    h1 { font-weight: 800 !important; }
+    h2 { font-weight: 700 !important; }
+
+    .lt-eyebrow {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.72rem;
+        letter-spacing: 0.14em;
+        color: var(--teal);
+        text-transform: uppercase;
+        margin-bottom: 0.2rem;
+    }
+    .lt-hero-title { font-size: 2.1rem; margin: 0 0 0.15rem 0; }
+    .lt-hero-sub { color: var(--muted); font-size: 0.98rem; margin-bottom: 0.4rem; }
+    .lt-hairline { border: none; border-top: 1px solid var(--line); margin: 1.6rem 0; }
+
+    .lt-step-tag {
+        display: inline-block;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.68rem;
+        letter-spacing: 0.1em;
+        background: var(--primary);
+        color: #fff;
+        padding: 2px 8px;
+        border-radius: 4px;
+        margin-bottom: 0.5rem;
+    }
+
+    .lt-stat-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+    }
+    .lt-stat {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 0.9rem 1rem;
+        box-shadow: 0 1px 2px var(--shadow);
+    }
+    .lt-stat-label {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.68rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 0.25rem;
+    }
+    .lt-stat-value {
+        font-family: 'Manrope', sans-serif;
+        font-weight: 800;
+        font-size: 1.7rem;
+        color: var(--ink);
+    }
+    .lt-stat-good { color: var(--good); }
+    .lt-stat-warn { color: var(--warn); }
+    .lt-stat-danger { color: var(--danger); }
+
+    div[data-testid="stFileUploaderDropzone"] {
+        background: var(--surface);
+        border: 1.5px dashed var(--line);
+        border-radius: 10px;
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background: var(--surface);
+        border-radius: 12px;
+        border: 1px solid var(--line) !important;
+        padding: 1.1rem 1.4rem;
+    }
+
+    .lt-cal-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+    }
+    .lt-cal-table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.85rem;
+    }
+    .lt-cal-table th, .lt-cal-table td {
+        border: 1px solid var(--line);
+        padding: 8px 14px;
+        text-align: center;
+        white-space: nowrap;
+    }
+    .lt-cal-table th {
+        background: var(--canvas);
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.68rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 500;
+    }
+    .lt-cal-table td.lt-cal-label {
+        text-align: left;
+        font-weight: 600;
+        color: var(--ink);
+    }
+    .lt-cal-table td.lt-cal-id {
+        text-align: left;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.78rem;
+        color: var(--muted);
+    }
+    .lt-cal-good {
+        background: var(--good-bg);
+        color: var(--good);
+        font-weight: 700;
+    }
+    .lt-cal-bad {
+        background: var(--danger-bg);
+        color: var(--danger);
+        font-weight: 700;
+    }
+
+    div[data-testid="stDataFrame"] {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+    }
+
+    .stButton > button, .stDownloadButton > button {
+        border-radius: 7px;
+        font-weight: 600;
+        border: 1px solid var(--primary);
+    }
+    .stDownloadButton > button {
+        background: var(--primary);
+        color: #fff;
+    }
+    .stDownloadButton > button:hover {
+        background: var(--primary-dark);
+        border-color: var(--primary-dark);
+        color: #fff;
+    }
+
+    .lt-legend {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin: 0.35rem 0 0.75rem 0;
+    }
+    .lt-legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.75rem;
+        color: var(--muted);
+    }
+    .lt-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+    }
+    .lt-dot-good { background: var(--good); }
+    .lt-dot-danger { background: var(--danger); }
+
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    .lt-footer {
+        margin-top: 2.5rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-family: 'IBM Plex Mono', monospace;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown('<div class="lt-eyebrow">LAB COMPLIANCE DASHBOARD</div>', unsafe_allow_html=True)
+st.markdown('<h1 class="lt-hero-title">Labs Tracker</h1>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="lt-hero-sub">Cross-reference lab reporting activity against your master registry, '
+    'by HFR ID.</div>',
+    unsafe_allow_html=True,
+)
 
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -193,21 +423,31 @@ def append_rows_to_master(original_bytes, sheet_path, new_rows_cells, max_row):
 # UI: uploads
 # ---------------------------------------------------------------------------
 
-st.header("1. Upload Master Labs File (.xlsx)")
-master_file = st.file_uploader(
-    "Master file must have headers on row 6, including 'Lab Name', 'HFR Code', "
-    "'Block Name', 'Category', and 'Lab Type'.",
-    type=["xlsx"],
-    key="master_uploader",
-)
+upload_col1, upload_col2 = st.columns(2)
 
-st.header("2. Upload Data CSV File")
-uploaded_file = st.file_uploader(
-    "Data file must have headers on row 10, including 'Lab Name', 'Result Date', "
-    "'HFR ID', 'Lab Block', and 'Lab Type'.",
-    type=["csv"],
-    key="csv_uploader",
-)
+with upload_col1:
+    with st.container(border=True):
+        st.markdown('<span class="lt-step-tag">STEP 01</span>', unsafe_allow_html=True)
+        st.markdown("**Master Labs Registry**")
+        st.caption(
+            "`.xlsx` · headers on row 6 · requires *Lab Name*, *HFR Code*, "
+            "*Block Name*, *Category*, *Lab Type*"
+        )
+        master_file = st.file_uploader(
+            "Upload master file", type=["xlsx"], key="master_uploader", label_visibility="collapsed"
+        )
+
+with upload_col2:
+    with st.container(border=True):
+        st.markdown('<span class="lt-step-tag">STEP 02</span>', unsafe_allow_html=True)
+        st.markdown("**Lab Report Data**")
+        st.caption(
+            "`.csv` · headers on row 10 · requires *Lab Name*, *Result Date*, "
+            "*HFR ID*, *Lab Block*, *Lab Type*"
+        )
+        uploaded_file = st.file_uploader(
+            "Upload data CSV", type=["csv"], key="csv_uploader", label_visibility="collapsed"
+        )
 
 if master_file and uploaded_file:
     # -----------------------------------------------------------------
@@ -396,10 +636,44 @@ if master_file and uploaded_file:
     table_rows.sort(key=lambda x: (x["Lab Name"] or "").lower())
 
     # -----------------------------------------------------------------
+    # Overview metrics
+    # -----------------------------------------------------------------
+    total_labs = len(table_rows)
+    no_reports_count = sum(1 for r in table_rows if r["Latest Result Date"] == "No Reports")
+    not_in_master_count = len(not_in_master)
+    reported_count = total_labs - no_reports_count - not_in_master_count
+
+    st.markdown('<hr class="lt-hairline"/>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="lt-stat-grid">
+            <div class="lt-stat">
+                <div class="lt-stat-label">Total Labs Tracked</div>
+                <div class="lt-stat-value">{total_labs}</div>
+            </div>
+            <div class="lt-stat">
+                <div class="lt-stat-label">Reported</div>
+                <div class="lt-stat-value lt-stat-good">{reported_count}</div>
+            </div>
+            <div class="lt-stat">
+                <div class="lt-stat-label">No Reports</div>
+                <div class="lt-stat-value lt-stat-warn">{no_reports_count}</div>
+            </div>
+            <div class="lt-stat">
+                <div class="lt-stat-label">Not In Master</div>
+                <div class="lt-stat-value lt-stat-danger">{not_in_master_count}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # -----------------------------------------------------------------
     # Block attendance checker
     # -----------------------------------------------------------------
-    st.divider()
-    st.header("Block Attendance Checker")
+    st.markdown('<hr class="lt-hairline"/>', unsafe_allow_html=True)
+    st.header("Block Reporting Calendar")
+    st.caption("See which labs in a block filed a report on each day of a date range.")
 
     block_names_available = sorted(
         {r["Block Name"] for r in table_rows if r["Block Name"] not in ("No Data", "No data")}
@@ -438,26 +712,51 @@ if master_file and uploaded_file:
                         date_list.append(d)
                         d += timedelta(days=1)
 
-                    attendance_rows = []
+                    st.markdown(
+                        f"**{selected_block}** &nbsp;·&nbsp; "
+                        f"{start_date.strftime('%b %d, %Y')} – {end_date.strftime('%b %d, %Y')}"
+                    )
+                    st.markdown(
+                        '<div class="lt-legend">'
+                        '<span class="lt-legend-item"><span class="lt-dot lt-dot-good"></span>report filed</span>'
+                        '<span class="lt-legend-item"><span class="lt-dot lt-dot-danger"></span>no report</span>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    header_cells = "".join(
+                        f"<th>{html.escape(day.strftime('%b %d'))}</th>" for day in date_list
+                    )
+                    body_rows = []
                     for lab in labs_in_block:
                         hfr_id = lab["HFR ID"]
                         dates_present = csv_groups.get(hfr_id, {}).get("dates_present", set())
-                        row_dict = {"Lab Name": lab["Lab Name"], "HFR ID": hfr_id}
-                        for day in date_list:
-                            row_dict[day.strftime("%Y-%m-%d")] = "✅" if day in dates_present else "❌"
-                        attendance_rows.append(row_dict)
+                        day_cells = "".join(
+                            f'<td class="{"lt-cal-good" if day in dates_present else "lt-cal-bad"}">'
+                            f'{"✓" if day in dates_present else "✗"}</td>'
+                            for day in date_list
+                        )
+                        body_rows.append(
+                            f"<tr><td class='lt-cal-label'>{html.escape(lab['Lab Name'])}</td>"
+                            f"<td class='lt-cal-id'>{html.escape(hfr_id)}</td>{day_cells}</tr>"
+                        )
 
-                    st.subheader(
-                        f"Attendance for '{selected_block}' — {start_date.strftime('%Y-%m-%d')} "
-                        f"to {end_date.strftime('%Y-%m-%d')}"
-                    )
-                    st.dataframe(attendance_rows, use_container_width=True, hide_index=True)
+                    calendar_html = f"""
+                    <div class="lt-cal-wrap">
+                        <table class="lt-cal-table">
+                            <thead><tr><th>Lab Name</th><th>HFR ID</th>{header_cells}</tr></thead>
+                            <tbody>{''.join(body_rows)}</tbody>
+                        </table>
+                    </div>
+                    """
+                    st.markdown(calendar_html, unsafe_allow_html=True)
 
     # -----------------------------------------------------------------
     # Filters
     # -----------------------------------------------------------------
-    st.divider()
-    st.header("Results")
+    st.markdown('<hr class="lt-hairline"/>', unsafe_allow_html=True)
+    st.header("Lab Report Status")
+    st.caption("Filter by Block Name, Category, or Lab Type to narrow the table below.")
 
     filter_col1, filter_col2, filter_col3 = st.columns(3)
     block_options = sorted({r["Block Name"] for r in table_rows})
@@ -479,7 +778,7 @@ if master_file and uploaded_file:
     if selected_labtypes:
         filtered_rows = [r for r in filtered_rows if r["Lab Type"] in selected_labtypes]
 
-    st.subheader(f"Lab Report Status ({len(filtered_rows)} of {len(table_rows)} labs shown)")
+    st.caption(f"Showing **{len(filtered_rows)}** of **{len(table_rows)}** labs")
     st.dataframe(filtered_rows, use_container_width=True, hide_index=True)
 
     # Flag unparsed dates
@@ -497,10 +796,12 @@ if master_file and uploaded_file:
     # -----------------------------------------------------------------
     # Labs found in CSV but not in master -> warn + offer updated master
     # -----------------------------------------------------------------
+    st.markdown('<hr class="lt-hairline"/>', unsafe_allow_html=True)
+
     if not_in_master:
-        st.warning("The following labs were found in the CSV but are not in the master file:")
+        st.warning(f"{len(not_in_master)} lab(s) were found in the CSV but are not in the master file:")
         for entry in not_in_master:
-            st.write(f"- **{entry['lab_name']}** (HFR ID: {entry['hfr_id']}) — Not In Master File")
+            st.write(f"- **{entry['lab_name']}** · HFR ID `{entry['hfr_id']}`")
 
         try:
             new_rows_cells = []
@@ -533,3 +834,8 @@ if master_file and uploaded_file:
             st.error(f"Could not generate an updated master file: {e}")
     else:
         st.success("All labs in the CSV are present in the master file.")
+
+    st.markdown(
+        '<div class="lt-footer">LABS TRACKER · Matching is performed by HFR ID / HFR Code, not lab name</div>',
+        unsafe_allow_html=True,
+    )
