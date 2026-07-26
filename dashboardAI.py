@@ -28,6 +28,7 @@ st.markdown(
         --danger: #B23A48;
         --good-bg: rgba(27, 138, 90, 0.12);
         --danger-bg: rgba(178, 58, 72, 0.12);
+        --warn-bg: rgba(180, 119, 14, 0.14);
         --shadow: rgba(22, 35, 46, 0.05);
     }
 
@@ -46,6 +47,7 @@ st.markdown(
             --danger: #E58A93;
             --good-bg: rgba(70, 204, 141, 0.16);
             --danger-bg: rgba(229, 138, 147, 0.16);
+            --warn-bg: rgba(227, 172, 77, 0.18);
             --shadow: rgba(0, 0, 0, 0.25);
         }
     }
@@ -166,10 +168,22 @@ st.markdown(
         color: var(--good);
         font-weight: 700;
     }
+    .lt-cal-warn {
+        background: var(--warn-bg);
+        color: var(--warn);
+        font-weight: 700;
+    }
     .lt-cal-bad {
         background: var(--danger-bg);
         color: var(--danger);
         font-weight: 700;
+    }
+    .lt-cal-nil {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.6rem;
+        font-weight: 500;
+        opacity: 0.85;
+        margin-top: 2px;
     }
 
     div[data-testid="stDataFrame"] {
@@ -214,6 +228,7 @@ st.markdown(
         border-radius: 50%;
     }
     .lt-dot-good { background: var(--good); }
+    .lt-dot-warn { background: var(--warn); }
     .lt-dot-danger { background: var(--danger); }
 
     #MainMenu { visibility: hidden; }
@@ -244,6 +259,7 @@ REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS = {"main": MAIN_NS}
 
 MASTER_HEADER_ROW = 6
+NIL_HEADER_ROW = 7
 CSV_HEADER_ROW_INDEX = 9  # 0-based -> row 10
 
 DATE_FORMATS = [
@@ -278,6 +294,31 @@ def parse_date(value: str):
     return None
 
 
+def excel_serial_to_date(value: str):
+    """Convert a raw Excel date serial number (how xlsx date cells are
+    stored under the hood) into a datetime. Returns None if not numeric."""
+    value = (value or "").strip()
+    if not re.fullmatch(r"-?\d+(\.\d+)?", value):
+        return None
+    try:
+        serial = float(value)
+    except ValueError:
+        return None
+    try:
+        return datetime(1899, 12, 30) + timedelta(days=serial)
+    except OverflowError:
+        return None
+
+
+def parse_date_flexible(value: str):
+    """Try text date formats first, then fall back to Excel's numeric
+    date-serial representation (used for genuine xlsx Date-typed cells)."""
+    parsed = parse_date(value)
+    if parsed is not None:
+        return parsed
+    return excel_serial_to_date(value)
+
+
 def find_column_index(header, target_name):
     for i, col_name in enumerate(header):
         if (col_name or "").strip().lower() == target_name.strip().lower():
@@ -288,6 +329,53 @@ def find_column_index(header, target_name):
 def or_default(value, default):
     value = (value or "").strip()
     return value if value else default
+
+
+def is_form_filled(value):
+    v = (value or "").strip()
+    return v != "" and v != "-"
+
+
+def compute_nil_status(lab_type_raw, s_val, p_val, l_val):
+    """Determine full/partial/none status for a Nil Reporting row.
+
+    SC labs only need S Form + L Form. CHC/PHC labs only need P Form + L Form.
+    Any other (unrecognized) lab type is judged against all three forms:
+    full only if all three are filled, none if all three are empty,
+    otherwise partial (with a lab-type-mismatch disclaimer).
+    Returns (status, symbol, matched_type) where status is 'full' | 'partial' | 'none',
+    symbol is None | 'F' | 'L' | '!', and matched_type is False for unrecognized lab types.
+    """
+    lt = (lab_type_raw or "").strip().upper()
+    s_filled = is_form_filled(s_val)
+    p_filled = is_form_filled(p_val)
+    l_filled = is_form_filled(l_val)
+
+    if lt == "SC":
+        facility_filled = s_filled
+        lab_filled = l_filled
+        if facility_filled and lab_filled:
+            return "full", None, True
+        if facility_filled or lab_filled:
+            return "partial", ("F" if facility_filled else "L"), True
+        return "none", None, True
+
+    if lt in ("CHC", "PHC"):
+        facility_filled = p_filled
+        lab_filled = l_filled
+        if facility_filled and lab_filled:
+            return "full", None, True
+        if facility_filled or lab_filled:
+            return "partial", ("F" if facility_filled else "L"), True
+        return "none", None, True
+
+    # Unmatched lab type: judge against all three forms individually.
+    filled_count = sum([s_filled, p_filled, l_filled])
+    if filled_count == 3:
+        return "full", None, False
+    if filled_count == 0:
+        return "none", None, False
+    return "partial", "!", False
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +511,7 @@ def append_rows_to_master(original_bytes, sheet_path, new_rows_cells, max_row):
 # UI: uploads
 # ---------------------------------------------------------------------------
 
-upload_col1, upload_col2 = st.columns(2)
+upload_col1, upload_col2, upload_col3 = st.columns(3)
 
 with upload_col1:
     with st.container(border=True):
@@ -447,6 +535,18 @@ with upload_col2:
         )
         uploaded_file = st.file_uploader(
             "Upload data CSV", type=["csv"], key="csv_uploader", label_visibility="collapsed"
+        )
+
+with upload_col3:
+    with st.container(border=True):
+        st.markdown('<span class="lt-step-tag">STEP 03</span>', unsafe_allow_html=True)
+        st.markdown("**Nil Reporting**")
+        st.caption(
+            "`.xlsx` · headers on row 7 · requires *HFR ID*, *Facility / Lab Name*, "
+            "*Faciltiy / Lab Type*, *Block*, *Date*, *S Form*, *P Form*, *L Form*"
+        )
+        nil_file = st.file_uploader(
+            "Upload nil reporting file", type=["xlsx"], key="nil_uploader", label_visibility="collapsed"
         )
 
 if master_file and uploaded_file:
@@ -589,20 +689,149 @@ if master_file and uploaded_file:
             group["unparsed"] += 1
 
     # -----------------------------------------------------------------
+    # Parse Nil Reporting .xlsx (optional)
+    # -----------------------------------------------------------------
+    nil_groups = {}  # hfr_id -> {"lab_name", "block_name", "category", "unparsed", "date_status": {date: {...}}}
+
+    if nil_file:
+        nil_bytes = nil_file.getvalue()
+        try:
+            nz = zipfile.ZipFile(BytesIO(nil_bytes))
+            nil_shared_strings = get_shared_strings(nz)
+            nil_sheet_path = get_first_sheet_path(nz)
+            nil_rows, nil_max_row = parse_sheet_rows(nz, nil_sheet_path, nil_shared_strings)
+            nz.close()
+        except Exception as e:
+            st.error(f"Could not read the Nil Reporting .xlsx file: {e}")
+            st.stop()
+
+        if NIL_HEADER_ROW not in nil_rows:
+            st.error(f"Nil Reporting file doesn't appear to have data on row {NIL_HEADER_ROW} (the header row).")
+            st.stop()
+
+        nil_header = nil_rows[NIL_HEADER_ROW]
+        nil_col_names = {
+            "hfr id": None,
+            "facility / lab name": None,
+            "faciltiy / lab type": None,
+            "block": None,
+            "date": None,
+            "s form": None,
+            "p form": None,
+            "l form": None,
+        }
+        for idx, val in nil_header.items():
+            v = (val or "").strip().lower()
+            if v in nil_col_names:
+                nil_col_names[v] = idx
+
+        missing_nil_cols = [
+            name for name, idx in nil_col_names.items() if idx is None
+        ]
+        if missing_nil_cols:
+            st.error(
+                f"Nil Reporting file is missing required column(s) on row {NIL_HEADER_ROW}: "
+                f"{', '.join(missing_nil_cols)}."
+            )
+            st.stop()
+
+        nil_hfr_col = nil_col_names["hfr id"]
+        nil_lab_col = nil_col_names["facility / lab name"]
+        nil_labtype_col = nil_col_names["faciltiy / lab type"]
+        nil_block_col = nil_col_names["block"]
+        nil_date_col = nil_col_names["date"]
+        nil_s_col = nil_col_names["s form"]
+        nil_p_col = nil_col_names["p form"]
+        nil_l_col = nil_col_names["l form"]
+
+        for r_num, row_vals in nil_rows.items():
+            if r_num <= NIL_HEADER_ROW:
+                continue
+            hfr_id = str(row_vals.get(nil_hfr_col, "")).strip()
+            if not hfr_id:
+                continue
+
+            lab_name = str(row_vals.get(nil_lab_col, "")).strip()
+            lab_type_raw = str(row_vals.get(nil_labtype_col, "")).strip()
+            block_val = str(row_vals.get(nil_block_col, "")).strip()
+            date_str = str(row_vals.get(nil_date_col, ""))
+            s_val = str(row_vals.get(nil_s_col, ""))
+            p_val = str(row_vals.get(nil_p_col, ""))
+            l_val = str(row_vals.get(nil_l_col, ""))
+
+            group = nil_groups.setdefault(
+                hfr_id, {"lab_name": "", "block_name": "", "category": "", "unparsed": 0, "date_status": {}}
+            )
+            if lab_name:
+                group["lab_name"] = lab_name
+            if block_val:
+                group["block_name"] = block_val
+            if lab_type_raw:
+                group["category"] = lab_type_raw
+
+            parsed = parse_date_flexible(date_str)
+            if parsed is None:
+                group["unparsed"] += 1
+                continue
+
+            status, symbol, matched_type = compute_nil_status(lab_type_raw, s_val, p_val, l_val)
+            if status == "none":
+                continue
+
+            group["date_status"][parsed.date()] = {
+                "status": status,
+                "symbol": symbol,
+                "matched_type": matched_type,
+                "lab_type_raw": lab_type_raw,
+            }
+
+    def resolve_latest_date(csv_group, nil_group):
+        """Combine CSV and Nil Reporting sources for a lab's Latest Result Date.
+        CSV wins on ties or when it's the more recent (or only) source."""
+        csv_latest_dt = csv_group["latest_date"] if csv_group else None
+        csv_latest_date_only = csv_latest_dt.date() if csv_latest_dt else None
+        nil_date_status = nil_group["date_status"] if nil_group else {}
+        nil_latest_date_only = max(nil_date_status.keys()) if nil_date_status else None
+
+        if csv_latest_date_only is not None and (
+            nil_latest_date_only is None or csv_latest_date_only >= nil_latest_date_only
+        ):
+            return csv_latest_dt.strftime("%Y-%m-%d")
+
+        if nil_latest_date_only is not None:
+            info = nil_date_status[nil_latest_date_only]
+            base = nil_latest_date_only.strftime("%Y-%m-%d")
+            if info["status"] == "full":
+                return f"{base} (nil report)"
+            mismatch_note = (
+                " — lab type doesn't match SC/CHC/PHC" if not info["matched_type"] else ""
+            )
+            return f"{base} (partial nil report){mismatch_note}"
+
+        if csv_group is not None:
+            return "No valid date found"
+        return "No Reports"
+
+    # -----------------------------------------------------------------
     # Cross-reference master vs. csv, keyed by HFR Code / HFR ID
     # -----------------------------------------------------------------
     table_rows = []
 
     for hfr_code, info in master_labs.items():
         csv_group = csv_groups.get(hfr_code)
-        if csv_group:
-            latest = csv_group["latest_date"]
-            date_display = latest.strftime("%Y-%m-%d") if latest else "No valid date found"
-        else:
-            date_display = "No Reports"
+        nil_group = nil_groups.get(hfr_code)
+        date_display = resolve_latest_date(csv_group, nil_group)
 
-        block_name = info["block_name"] or (csv_group["block_name"] if csv_group else "")
-        category = info["category"] or (csv_group["category"] if csv_group else "")
+        block_name = (
+            info["block_name"]
+            or (csv_group["block_name"] if csv_group else "")
+            or (nil_group["block_name"] if nil_group else "")
+        )
+        category = (
+            info["category"]
+            or (csv_group["category"] if csv_group else "")
+            or (nil_group["category"] if nil_group else "")
+        )
 
         table_rows.append(
             {
@@ -616,22 +845,30 @@ if master_file and uploaded_file:
         )
 
     not_in_master = []
-    for hfr_id, group in csv_groups.items():
-        if hfr_id not in master_labs:
-            latest = group["latest_date"]
-            date_display = latest.strftime("%Y-%m-%d") if latest else "No valid date found"
-            display_name = f"[NOT IN MASTER FILE] {group['lab_name']}"
-            table_rows.append(
-                {
-                    "Lab Name": display_name,
-                    "HFR ID": hfr_id,
-                    "Latest Result Date": date_display,
-                    "Block Name": or_default(group["block_name"], "No data"),
-                    "Category": or_default(group["category"], "No data"),
-                    "Lab Type": "No data",
-                }
-            )
-            not_in_master.append({"lab_name": group["lab_name"], "hfr_id": hfr_id, "group": group})
+    non_master_ids = (set(csv_groups.keys()) | set(nil_groups.keys())) - set(master_labs.keys())
+    for hfr_id in sorted(non_master_ids):
+        csv_group = csv_groups.get(hfr_id)
+        nil_group = nil_groups.get(hfr_id)
+
+        lab_name = (csv_group["lab_name"] if csv_group else "") or (nil_group["lab_name"] if nil_group else "")
+        block_name = (csv_group["block_name"] if csv_group else "") or (nil_group["block_name"] if nil_group else "")
+        category = (csv_group["category"] if csv_group else "") or (nil_group["category"] if nil_group else "")
+
+        date_display = resolve_latest_date(csv_group, nil_group)
+        display_name = f"[NOT IN MASTER FILE] {lab_name}"
+        table_rows.append(
+            {
+                "Lab Name": display_name,
+                "HFR ID": hfr_id,
+                "Latest Result Date": date_display,
+                "Block Name": or_default(block_name, "No data"),
+                "Category": or_default(category, "No data"),
+                "Lab Type": "No data",
+            }
+        )
+        not_in_master.append(
+            {"lab_name": lab_name, "hfr_id": hfr_id, "group": {"block_name": block_name, "category": category}}
+        )
 
     table_rows.sort(key=lambda x: (x["Lab Name"] or "").lower())
 
@@ -719,10 +956,37 @@ if master_file and uploaded_file:
                     st.markdown(
                         '<div class="lt-legend">'
                         '<span class="lt-legend-item"><span class="lt-dot lt-dot-good"></span>report filed</span>'
+                        '<span class="lt-legend-item"><span class="lt-dot lt-dot-warn"></span>partial nil report</span>'
                         '<span class="lt-legend-item"><span class="lt-dot lt-dot-danger"></span>no report</span>'
+                        '<span class="lt-legend-item">(nil) marks a report sourced from the Nil Reporting file</span>'
                         '</div>',
                         unsafe_allow_html=True,
                     )
+
+                    def get_day_status(hfr_id, day):
+                        """Returns (css_class, symbol, show_nil_tag, tooltip)."""
+                        csv_dates = csv_groups.get(hfr_id, {}).get("dates_present", set())
+                        if day in csv_dates:
+                            return "lt-cal-good", "✓", False, None
+
+                        nil_group = nil_groups.get(hfr_id)
+                        if nil_group:
+                            info = nil_group["date_status"].get(day)
+                            if info:
+                                if info["status"] == "full":
+                                    return "lt-cal-good", "✓", True, "Nil report filed — all required forms submitted"
+                                if not info["matched_type"]:
+                                    tooltip = (
+                                        f"Lab type '{info['lab_type_raw']}' doesn't match SC, CHC, or PHC — "
+                                        "showing partial since not all 3 forms were filed"
+                                    )
+                                elif info["symbol"] == "F":
+                                    tooltip = "Facility portal form filed; Lab portal (L Form) missing"
+                                else:
+                                    tooltip = "Lab portal (L Form) filed; Facility portal form missing"
+                                return "lt-cal-warn", info["symbol"], True, tooltip
+
+                        return "lt-cal-bad", "✗", False, None
 
                     header_cells = "".join(
                         f"<th>{html.escape(day.strftime('%b %d'))}</th>" for day in date_list
@@ -730,12 +994,12 @@ if master_file and uploaded_file:
                     body_rows = []
                     for lab in labs_in_block:
                         hfr_id = lab["HFR ID"]
-                        dates_present = csv_groups.get(hfr_id, {}).get("dates_present", set())
-                        day_cells = "".join(
-                            f'<td class="{"lt-cal-good" if day in dates_present else "lt-cal-bad"}">'
-                            f'{"✓" if day in dates_present else "✗"}</td>'
-                            for day in date_list
-                        )
+                        day_cells = ""
+                        for day in date_list:
+                            css_class, symbol, show_nil, tooltip = get_day_status(hfr_id, day)
+                            nil_html = '<div class="lt-cal-nil">(nil)</div>' if show_nil else ""
+                            title_attr = f' title="{html.escape(tooltip)}"' if tooltip else ""
+                            day_cells += f'<td class="{css_class}"{title_attr}>{symbol}{nil_html}</td>'
                         body_rows.append(
                             f"<tr><td class='lt-cal-label'>{html.escape(lab['Lab Name'])}</td>"
                             f"<td class='lt-cal-id'>{html.escape(hfr_id)}</td>{day_cells}</tr>"
@@ -782,16 +1046,26 @@ if master_file and uploaded_file:
     st.dataframe(filtered_rows, use_container_width=True, hide_index=True)
 
     # Flag unparsed dates
-    flagged = {hfr_id: g["unparsed"] for hfr_id, g in csv_groups.items() if g["unparsed"] > 0}
-    if flagged:
+    flagged_csv = {hfr_id: g["unparsed"] for hfr_id, g in csv_groups.items() if g["unparsed"] > 0}
+    flagged_nil = {hfr_id: g["unparsed"] for hfr_id, g in nil_groups.items() if g["unparsed"] > 0}
+    if flagged_csv or flagged_nil:
         with st.expander("Labs with unparseable date entries"):
-            st.write(
-                "These entries (by HFR ID) had at least one 'Result Date' value that "
-                "couldn't be parsed with the supported date formats and was ignored."
-            )
-            for hfr_id, count in sorted(flagged.items()):
-                lab_name = csv_groups[hfr_id]["lab_name"]
-                st.write(f"- {lab_name} (HFR ID: {hfr_id}): {count} unparseable entr{'y' if count == 1 else 'ies'}")
+            if flagged_csv:
+                st.write(
+                    "**CSV** — these entries (by HFR ID) had at least one 'Result Date' value that "
+                    "couldn't be parsed and was ignored:"
+                )
+                for hfr_id, count in sorted(flagged_csv.items()):
+                    lab_name = csv_groups[hfr_id]["lab_name"]
+                    st.write(f"- {lab_name} (HFR ID: {hfr_id}): {count} unparseable entr{'y' if count == 1 else 'ies'}")
+            if flagged_nil:
+                st.write(
+                    "**Nil Reporting file** — these entries (by HFR ID) had at least one 'Date' value that "
+                    "couldn't be parsed and was ignored:"
+                )
+                for hfr_id, count in sorted(flagged_nil.items()):
+                    lab_name = nil_groups[hfr_id]["lab_name"]
+                    st.write(f"- {lab_name} (HFR ID: {hfr_id}): {count} unparseable entr{'y' if count == 1 else 'ies'}")
 
     # -----------------------------------------------------------------
     # Labs found in CSV but not in master -> warn + offer updated master
